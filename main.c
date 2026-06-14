@@ -11,9 +11,9 @@ int num_threads;
 
 uint16_t transitions[1296][4];
 
-uint8_t trans_normalized_sorted[1296][5];
-uint8_t trans_normalized[1296][5];
-uint8_t trans[1296][5];
+uint8_t trans_normalized_sorted[56][5];
+uint8_t trans_normalized[155][5];
+uint8_t trans[460][5];
 uint16_t n_tns = 0;
 uint16_t n_tn = 0;
 uint16_t n_ts = 0;
@@ -140,7 +140,6 @@ KHASH_INIT(
 )
 
 khash_t(state_map) *current;
-khash_t(state_map) *next;
 
 uint64_t n_wins;
 uint64_t n_games;
@@ -226,22 +225,22 @@ void step(State state_current, uint64_t multiplicity, int tid){
         state_next.state[2] = state_current.state[2] + trans_normalized_sorted[i][2];
         state_next.state[3] = state_current.state[3] + trans_normalized_sorted[i][3];
 
-        // todo: multiplicity * trans_normalized_sorted[i][4]; einmal berechnen
+        uint64_t mul_next = multiplicity * trans_normalized_sorted[i][4];
 
         if (is_won(state_next.state)){
-            local_wins[tid] += multiplicity * trans_normalized_sorted[i][4];
+            local_wins[tid] += mul_next;
         }
         else{
             int ret;
             khiter_t key_next = kh_put(state_map, local_next[tid], state_next, &ret);
             if (ret > 0){
-                kh_value(local_next[tid], key_next) = multiplicity * trans_normalized_sorted[i][4];
+                kh_value(local_next[tid], key_next) = mul_next;
             }
             else{
-                kh_value(local_next[tid], key_next) += multiplicity * trans_normalized_sorted[i][4];
+                kh_value(local_next[tid], key_next) += mul_next;
             }
         }
-        local_games[tid] += multiplicity * trans_normalized_sorted[i][4];
+        local_games[tid] += mul_next;
     }
     for (int i = 0; i < n_tn; i++){               // saves normalizing
         state_next.state[0] = state_current.state[0] + trans_normalized[i][0];
@@ -249,21 +248,22 @@ void step(State state_current, uint64_t multiplicity, int tid){
         state_next.state[2] = state_current.state[2] + trans_normalized[i][2];
         state_next.state[3] = state_current.state[3] + trans_normalized[i][3];
         sort4(state_next.state);
+        uint64_t mul_next = multiplicity * trans_normalized[i][4];
 
         if (is_won(state_next.state)){
-            local_wins[tid] += multiplicity * trans_normalized[i][4];
+            local_wins[tid] += mul_next;
         }
         else{
             int ret;
             khiter_t key_next = kh_put(state_map, local_next[tid], state_next, &ret);
             if (ret > 0){
-                kh_value(local_next[tid], key_next) = multiplicity * trans_normalized[i][4];
+                kh_value(local_next[tid], key_next) = mul_next;
             }
             else{
-                kh_value(local_next[tid], key_next) += multiplicity * trans_normalized[i][4];
+                kh_value(local_next[tid], key_next) += mul_next;
             }
         }
-        local_games[tid] += multiplicity * trans_normalized[i][4];
+        local_games[tid] += mul_next;
     }
     for (int i = 0; i < n_t; i++){               // saves nothing lol
         state_next.state[0] = state_current.state[0] + trans[i][0];
@@ -272,27 +272,28 @@ void step(State state_current, uint64_t multiplicity, int tid){
         state_next.state[3] = state_current.state[3] + trans[i][3];
         normalize(state_next.state);
         sort4(state_next.state);
+        uint64_t mul_next = multiplicity * trans[i][4];
 
-        if (is_won(state_next.state)){
-            local_wins[tid] += multiplicity * trans[i][4];
+        if (is_won(state_next.state)){ //Always won after round 1, however removing makes code slower :(
+            local_wins[tid] += mul_next;
         }
         else{
             int ret;
             khiter_t key_next = kh_put(state_map, local_next[tid], state_next, &ret);
             if (ret > 0){
-                kh_value(local_next[tid], key_next) = multiplicity * trans[i][4];
+                kh_value(local_next[tid], key_next) = mul_next;
             }
             else{
-                kh_value(local_next[tid], key_next) += multiplicity * trans[i][4];
+                kh_value(local_next[tid], key_next) += mul_next;
             }
         }
-        local_games[tid] += multiplicity * trans[i][4];
+        local_games[tid] += mul_next;
     }
 }
 
 // post step functions
 
-void unify(khash_t(state_map) *current){
+void unify(khash_t(state_map) *current, int round){
     n_wins = 0;
     n_games = 0;
     for (int i = 0; i < num_threads; i++){
@@ -319,7 +320,7 @@ void unify(khash_t(state_map) *current){
         }
     }
     float pct = ((float)n_wins / n_games) * 100;
-    printf("%.5f%% n_states: %i ", pct, kh_size(current));
+    printf("Round %i: %.5f%% n_states: %i ", round, pct, kh_size(current));
 }
 
 int main()
@@ -351,7 +352,6 @@ int main()
     scanf("%i", &depth);
     double t_start = omp_get_wtime();
     for (int i = 0; i < depth; i++){
-        printf("Round %i: ", i + 1);
         double t0 = omp_get_wtime();
         #pragma omp parallel
         {
@@ -365,15 +365,15 @@ int main()
                 }
             }
         }
-        double t1 = omp_get_wtime();
+        //double t1 = omp_get_wtime();
         kh_clear(state_map, current);
-        unify(current);
+        unify(current, i + 1);
         double t2 = omp_get_wtime();
         for (int i = 0; i < num_threads; i++){
             kh_clear(state_map, local_next[i]);
         }
         shift(current, n_games);
-        printf("times: %.3f step: %.3f unify; %.3f\n",t2 - t0, t1 - t0, t2 - t1);
+        printf("time: %.3f\n", t2 - t0);
     }
     double t_end = omp_get_wtime();
     printf("Total Time: %.3f", t_end - t_start);
