@@ -144,6 +144,9 @@ khash_t(state_map) *current;
 uint64_t n_wins;
 uint64_t n_games;
 
+float pct;
+float cum_pct;
+
 uint64_t *local_wins;
 uint64_t *local_games;
 khash_t(state_map) **local_next;
@@ -194,10 +197,7 @@ void static inline sort4(uint16_t *vector){                       // sorts 4 ele
 }
 
 int static inline is_won(uint16_t *vector){
-    if (vector[2] == 0 || vector[1] == vector[3]){
-        return 1;
-    }
-    return 0;
+    return (vector[2] == 0 || vector[1] == vector[3]);
 }
 
 void static inline shift(khash_t(state_map) *state, uint64_t n_states){
@@ -319,8 +319,9 @@ void unify(khash_t(state_map) *current, int round){
             }
         }
     }
-    float pct = ((float)n_wins / n_games) * 100;
-    printf("Round %i: %.5f%% n_states: %i ", round, pct, kh_size(current));
+    pct = ((float)n_wins / n_games) * 100;
+    cum_pct += pct;
+    printf("Round %i: %.5f%% cum_pct: %.5f%% n_states: %i ", round, pct, cum_pct, kh_size(current));
 }
 
 int main()
