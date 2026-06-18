@@ -16,7 +16,6 @@ uint8_t trans_normalized[155][5];
 uint8_t trans[460][5];
 uint16_t n_tns = 0;
 uint16_t n_tn = 0;
-uint16_t n_ts = 0;
 uint16_t n_t = 0;
 int depth;
 
@@ -133,7 +132,7 @@ static inline khint_t state_hash(State s){
 KHASH_INIT(
     state_map,      // name
     State,          // key type
-    uint64_t,       // value type
+    __uint128_t,    // value type
     1,              // map, not set
     state_hash,
     state_equal
@@ -141,14 +140,14 @@ KHASH_INIT(
 
 khash_t(state_map) *current;
 
-uint64_t n_wins;
-uint64_t n_games;
+__uint128_t n_wins;
+__uint128_t n_games;
 
 float pct;
 float cum_pct;
 
-uint64_t *local_wins;
-uint64_t *local_games;
+__uint128_t *local_wins;
+__uint128_t *local_games;
 khash_t(state_map) **local_next;
 
 
@@ -200,9 +199,9 @@ int static inline is_won(uint16_t *vector){
     return (vector[2] == 0 || vector[1] == vector[3]);
 }
 
-void static inline shift(khash_t(state_map) *state, uint64_t n_states){
+void static inline shift(khash_t(state_map) *state, __uint128_t n_states){
     //printf("\nshifting\n%i\n", n_states);
-    while ((n_states >> 53) > 0){
+    while ((n_states >> 117) > 0){
         n_states >>= 1;
         //printf("%i\n", n_states);
         for (khiter_t k = kh_begin(state);
@@ -217,7 +216,7 @@ void static inline shift(khash_t(state_map) *state, uint64_t n_states){
     }
 }
 
-void step(State state_current, uint64_t multiplicity, int tid){
+void step(State state_current, __uint128_t multiplicity, int tid){
     State state_next;
     for (int i = 0; i < n_tns; i++){               // saves sorting and normalizing
         state_next.state[0] = state_current.state[0] + trans_normalized_sorted[i][0];
@@ -225,7 +224,7 @@ void step(State state_current, uint64_t multiplicity, int tid){
         state_next.state[2] = state_current.state[2] + trans_normalized_sorted[i][2];
         state_next.state[3] = state_current.state[3] + trans_normalized_sorted[i][3];
 
-        uint64_t mul_next = multiplicity * trans_normalized_sorted[i][4];
+        __uint128_t mul_next = multiplicity * trans_normalized_sorted[i][4];
 
         if (is_won(state_next.state)){
             local_wins[tid] += mul_next;
@@ -248,7 +247,7 @@ void step(State state_current, uint64_t multiplicity, int tid){
         state_next.state[2] = state_current.state[2] + trans_normalized[i][2];
         state_next.state[3] = state_current.state[3] + trans_normalized[i][3];
         sort4(state_next.state);
-        uint64_t mul_next = multiplicity * trans_normalized[i][4];
+        __uint128_t mul_next = multiplicity * trans_normalized[i][4];
 
         if (is_won(state_next.state)){
             local_wins[tid] += mul_next;
@@ -272,7 +271,7 @@ void step(State state_current, uint64_t multiplicity, int tid){
         state_next.state[3] = state_current.state[3] + trans[i][3];
         normalize(state_next.state);
         sort4(state_next.state);
-        uint64_t mul_next = multiplicity * trans[i][4];
+        __uint128_t mul_next = multiplicity * trans[i][4];
 
         if (is_won(state_next.state)){ //Always won after round 1, however removing makes code slower :(
             local_wins[tid] += mul_next;
@@ -308,7 +307,7 @@ void unify(khash_t(state_map) *current, int round){
             if (!kh_exist(local_next[i], k))
                 continue;
             State state = kh_key(local_next[i], k);
-            uint64_t multiplicity = kh_val(local_next[i], k);
+            __uint128_t multiplicity = kh_val(local_next[i], k);
             int ret;
             khiter_t key_next = kh_put(state_map, current, state, &ret);
             if (ret > 0){
@@ -319,7 +318,7 @@ void unify(khash_t(state_map) *current, int round){
             }
         }
     }
-    pct = ((float)n_wins / n_games) * 100;
+    pct = ((double)n_wins / n_games) * 100;
     cum_pct += pct;
     printf("Round %i: %.5f%% cum_pct: %.5f%% n_states: %i ", round, pct, cum_pct, kh_size(current));
 }
@@ -361,7 +360,7 @@ int main()
             for (khiter_t k = kh_begin(current); k < kh_end(current); k++){
                 if (kh_exist(current, k)){
                     State state = kh_key(current, k);
-                    uint64_t multiplicity = kh_val(current, k);
+                    __uint128_t multiplicity = kh_val(current, k);
                     step(state, multiplicity, tid);
                 }
             }
