@@ -201,18 +201,22 @@ int static inline is_won(uint16_t *vector){
 
 void static inline shift(khash_t(state_map) *state, __uint128_t n_states){
     //printf("\nshifting\n%i\n", n_states);
-    while ((n_states >> 117) > 0){
-        n_states >>= 1;
-        //printf("%i\n", n_states);
-        for (khiter_t k = kh_begin(state);
-            k != kh_end(state);
-            ++k)
-        {
-            if (!kh_exist(state, k))
-                continue;
+    if (!(n_states >> 117))
+        return;
 
-            kh_value(state, k) >>= 1;
-        }
+    int highest = 127;
+
+    while (highest > 117 && ((n_states >> highest) & 1) == 0) {
+        highest--;
+    }
+
+    int n_shifts = highest - 116;
+
+    for (khiter_t k = kh_begin(state); k != kh_end(state); ++k) {
+        if (!kh_exist(state, k))
+            continue;
+
+        kh_value(state, k) >>= n_shifts;
     }
 }
 
