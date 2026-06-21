@@ -229,7 +229,6 @@ void step(State state_current, __uint128_t multiplicity, int tid){
         state_next.state[3] = state_current.state[3] + trans_normalized_sorted[i][3];
 
         __uint128_t mul_next = multiplicity * trans_normalized_sorted[i][4];
-
         if (is_won(state_next.state)){
             local_wins[tid] += mul_next;
         }
@@ -324,7 +323,7 @@ void unify(khash_t(state_map) *current, int round){
     }
     pct = ((double)n_wins / n_games) * 100;
     cum_pct += pct;
-    printf("Round %i: %.5f%% cum_pct: %.5f%% n_states: %i ", round, pct, cum_pct, kh_size(current));
+    printf("%5d | %10.8f | %10.5f | %12d | ", round, pct, cum_pct, kh_size(current));
 }
 
 int main()
@@ -354,6 +353,11 @@ int main()
 
     printf("Depth: ");
     scanf("%i", &depth);
+
+    printf("---------------------------------------------------------------------\n");
+    printf("%5s | %10s | %10s | %12s | %8s\n", "Round", "Pct", "CumPct", "States", "Time");
+    printf("---------------------------------------------------------------------\n");
+
     double t_start = omp_get_wtime();
     for (int i = 0; i < depth; i++){
         double t0 = omp_get_wtime();
@@ -377,7 +381,7 @@ int main()
             kh_clear(state_map, local_next[i]);
         }
         shift(current, n_games);
-        printf("time: %.3f\n", t2 - t0);
+        printf("%8.3f\n", t2 - t0);
     }
     double t_end = omp_get_wtime();
     printf("Total Time: %.3f", t_end - t_start);
