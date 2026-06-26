@@ -326,8 +326,70 @@ void unify(khash_t(state_map) *current, int round){
     printf("%5d | %10.8f | %10.5f | %12d | ", round, pct, cum_pct, kh_size(current));
 }
 
+void save_state(khash_t(state_map) *state, uint32_t round){
+    // FORMAT: uint32_t round | double cum_pct| uint64_t map_size | key_n, val_n
+    remove("state.bin.tmp");
+    FILE *bin_tmp = fopen("state.bin.tmp", "wb");
+    uint64_t state_size = kh_size(state);
+    fwrite(&round, sizeof(round), 1, bin_tmp);
+    fwrite(&cum_pct, sizeof(cum_pct), 1, bin_tmp);
+    fwrite(&state_size, sizeof(state_size), 1, bin_tmp);
+    for (khiter_t k = kh_begin(state); k < kh_end(state); k++){
+        if (!kh_exist(state, k)){
+            continue;
+        }
+        State key = kh_key(state, k);
+        __uint128_t val = kh_val(state, k);
+        fwrite(&key, sizeof(key), 1, bin_tmp);
+        fwrite(&val, sizeof(val), 1, bin_tmp);
+    }
+    fclose(bin_tmp);
+    remove("state.bin");
+    rename("state.bin.tmp", "state.bin");
+    remove("state.bin.tmp");
+}
+
+void load_state(khash_t(state_map) *state, uint32_t *round){
+    // FORMAT: uint32_t round | double cum_pct| uint64_t map_size | key_n, val_n
+    FILE *bin_state = fopen("state.bin", "rb");
+    if (bin_state == NULL){
+        *round = 0;
+        cum_pct = 0;
+        int ret;
+        State initial_state = {.state = {0, 0, 0, 0}};
+        khiter_t k = kh_put(state_map, state, initial_state, &ret);
+        kh_value(state, k) = 1;
+        return;
+    }
+    fread(round, sizeof(*round), 1, bin_state);
+    printf("Loading Round %u\n", *round);
+    fread(&cum_pct, sizeof(cum_pct), 1, bin_state);
+    uint64_t state_size;
+    fread(&state_size, sizeof(state_size), 1, bin_state);
+    printf("Size %llu\n", state_size);
+    State key;
+    __uint128_t val;
+    for (uint64_t i = 0; i < state_size; i++){
+        fread(&key, sizeof(key), 1, bin_state);
+        fread(&val, sizeof(val), 1, bin_state);
+        int ret;
+        khiter_t k = kh_put(state_map, state, key, &ret);
+        kh_value(state, k) = val;
+    }
+    uint32_t test;
+    fread(&test, sizeof(test), 1, bin_state);
+    printf("Test: %i\n", test);
+    fclose(bin_state);
+}
+
 int main()
 {
+    int reset;
+    printf("Reset? [0/1]: ");
+    scanf("%i", &reset);
+    if(reset){
+        remove("state.bin");
+    }
     num_threads = omp_get_max_threads();
     local_wins  = calloc(num_threads, sizeof(*local_wins));
     local_games = calloc(num_threads, sizeof(*local_games));
@@ -338,16 +400,13 @@ int main()
         local_next[t] = kh_init(state_map);
     }
     khash_t(state_map) *current = kh_init(state_map);
+    uint32_t round;
 
     // initialize initial value
 
-    int ret;
+    load_state(current, &round);
 
-    State initial_state = {.state = {0, 0, 0, 0}};
-
-    khiter_t k = kh_put(state_map, current, initial_state, &ret);
-
-    kh_value(current, k) = 1;
+    printf("Current Round: %i\n", round);
 
     initialize_transitions();
 
@@ -359,7 +418,7 @@ int main()
     printf("---------------------------------------------------------------------\n");
 
     double t_start = omp_get_wtime();
-    for (int i = 0; i < depth; i++){
+    for (uint32_t i = round; i < depth; i++){
         double t0 = omp_get_wtime();
         #pragma omp parallel
         {
@@ -377,10 +436,13 @@ int main()
         kh_clear(state_map, current);
         unify(current, i + 1);
         double t2 = omp_get_wtime();
-        for (int i = 0; i < num_threads; i++){
-            kh_clear(state_map, local_next[i]);
+        for (int t = 0; t < num_threads; t++){
+            kh_clear(state_map, local_next[t]);
         }
         shift(current, n_games);
+        save_state(current, i + 1);
+        //load_state(current, &i);
+        //i -= 1;
         printf("%8.3f\n", t2 - t0);
     }
     double t_end = omp_get_wtime();
