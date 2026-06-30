@@ -5,6 +5,8 @@
 #include <time.h>
 #include <omp.h>
 #include <windows.h>
+#include <psapi.h>
+#include <io.h>
 #include "structs.h"
 #include "khash.h"
 
@@ -146,6 +148,7 @@ __uint128_t n_games;
 
 float pct;
 float cum_pct;
+float bytes_per_state;
 
 __uint128_t *local_wins;
 __uint128_t *local_games;
@@ -299,13 +302,10 @@ void step(State state_current, __uint128_t multiplicity, int tid){
 void add_history(uint32_t round, double pct, double cum_pct, uint64_t state_size, int n_threads, double round_time){
     // FORMAT: uint32_t round | double pct | double cum_pct| uint64_t map_size | int threads | double time
     FILE *history = fopen("history.txt", "a");
-    if (history == NULL){
-        fprintf(history, "----------------------------------------------------------------------\n");
-        fprintf(history, "%5s | %10s | %10s | %12s | %5s | %8s |\n", "Round", "Pct", "CumPct", "States", "Threads", "Time");
-        fprintf(history, "----------------------------------------------------------------------\n");
-    }
-    fprintf(history, "%5d | %10.8f | %10.5f | %12d | %5i | %8.3f\n", round, pct, cum_pct, state_size, n_threads, round_time);
-    printf("%5d | %10.8f | %10.5f | %12d | %5i | %8.3f\n", round, pct, cum_pct, state_size, n_threads, round_time);
+    fprintf(history, "%5d | %10.8f | %10.5f | %12d | %7i | %8.3f\n", round, pct, cum_pct, state_size, n_threads, round_time);
+    printf("\033[8A");
+    printf("\033[2K\r");
+    printf("%5d | %10.8f | %10.5f | %12d | %7i | %8.3f\n", round, pct, cum_pct, state_size, n_threads, round_time);
     fclose(history);
 }
 
@@ -317,6 +317,8 @@ void unify(khash_t(state_map) *current, int round, int threads, double time_elap
         n_games += local_games[i];
         local_wins[i] = 0;
         local_games[i] = 0;
+        //uint64_t local_size = kh_size(local_next[i]);
+        //printf("local map %i size: %llu\n", i, local_size);
         for (khiter_t k = kh_begin(local_next[i]);
             k != kh_end(local_next[i]);
             ++k)
@@ -340,12 +342,13 @@ void unify(khash_t(state_map) *current, int round, int threads, double time_elap
     add_history(round, pct, cum_pct, kh_size(current), threads, time_elapsed);
 }
 
-void save_state(khash_t(state_map) *state, uint32_t round){
-    // FORMAT: uint32_t round | double cum_pct| uint64_t map_size | key_n, val_n
+void save_state(khash_t(state_map) *state, uint32_t round, int n_threads){
+    // FORMAT: uint32_t round | int num_threads | double cum_pct| uint64_t map_size | key_n, val_n
     remove("state.bin.tmp");
     FILE *bin_tmp = fopen("state.bin.tmp", "wb");
     uint64_t state_size = kh_size(state);
     fwrite(&round, sizeof(round), 1, bin_tmp);
+    fwrite(&n_threads, sizeof(n_threads), 1, bin_tmp);
     fwrite(&cum_pct, sizeof(cum_pct), 1, bin_tmp);
     fwrite(&state_size, sizeof(state_size), 1, bin_tmp);
     for (khiter_t k = kh_begin(state); k < kh_end(state); k++){
@@ -364,11 +367,12 @@ void save_state(khash_t(state_map) *state, uint32_t round){
 }
 
 void load_state(khash_t(state_map) *state, uint32_t *round){
-    // FORMAT: uint32_t round | double cum_pct| uint64_t map_size | key_n, val_n
+    // FORMAT: uint32_t round | float bytes_per_state | double cum_pct| uint64_t map_size | key_n, val_n
     FILE *bin_state = fopen("state.bin", "rb");
     if (bin_state == NULL){
         *round = 0;
         cum_pct = 0;
+        num_threads = omp_get_max_threads();
         int ret;
         State initial_state = {.state = {0, 0, 0, 0}};
         khiter_t k = kh_put(state_map, state, initial_state, &ret);
@@ -377,6 +381,8 @@ void load_state(khash_t(state_map) *state, uint32_t *round){
     }
     fread(round, sizeof(*round), 1, bin_state);
     printf("Loading Round %u\n", *round);
+    fread(&num_threads, sizeof(num_threads), 1, bin_state);
+    //printf("num_threads = %i\n", num_threads);
     fread(&cum_pct, sizeof(cum_pct), 1, bin_state);
     uint64_t state_size;
     fread(&state_size, sizeof(state_size), 1, bin_state);
@@ -393,25 +399,50 @@ void load_state(khash_t(state_map) *state, uint32_t *round){
     fclose(bin_state);
 }
 
+// TEMP HELPERS
+
+static double gib(uint64_t bytes) {
+    return bytes / (1024.0 * 1024.0 * 1024.0);
+}
+
 int set_threads(int round){
     MEMORYSTATUSEX mem;
     mem.dwLength = sizeof(mem);
     GlobalMemoryStatusEx(&mem);
+
+    PROCESS_MEMORY_COUNTERS_EX pmc;
+    GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc));
+    uint64_t commit = pmc.PrivateUsage;
+    uint64_t predicted_states = 21 * round * round * round;
     const double safety = 0.90;
-    uint64_t avail_ram = (uint64_t)(mem.ullAvailPhys * safety);
-    const uint64_t bytes_per_state = 100;
-    uint64_t predicted_mem = (21 * round * round * round) * bytes_per_state;
+    uint64_t avail_ram = (uint64_t)((mem.ullAvailPhys + commit) * safety);
+    uint64_t predicted_map_mem = (uint64_t)(predicted_states * bytes_per_state);
+    uint64_t predicted_commit;
     int n_threads = omp_get_max_threads();
     while (n_threads > 1){
-        if (predicted_mem * (n_threads + 1) > avail_ram){
+        predicted_commit = predicted_map_mem * (n_threads + 1);
+        if (predicted_commit > avail_ram){
             n_threads--;
         }
         else{
             break;
         }
     }
-    //printf("threads: %i\n", n_threads);
-    printf("predicted committed memory: %llu", predicted_mem * (n_threads + 1));
+    printf("----------------------------------------------------------------------\n");
+    printf("\033[2K\r");
+    printf("threads: %i\n", n_threads);
+    printf("\033[2K\r");
+    printf("bytes per state: %.1f B/s\n", bytes_per_state);
+    printf("\033[2K\r");
+    printf("Available RAM: %.2f GiB\n", gib((uint64_t)((mem.ullAvailPhys + commit) * safety)));
+    printf("\033[2K\r");
+    printf("predicted states: %llu\n", (unsigned long long)predicted_states);
+    printf("\033[2K\r");
+    printf("predicted map mem: %.2f GiB\n", gib(predicted_map_mem));
+    printf("\033[2K\r");
+    printf("predicted commit: %.2f GiB\n", gib(predicted_commit));
+    printf("\033[2K\r");
+    printf("real commit: %.2f GiB\n", gib(commit));
     return n_threads;
 }
 
@@ -454,14 +485,38 @@ int main()
     printf("Depth: ");
     scanf("%i", &depth);
 
-    printf("----------------------------------------------------------------------\n");
-    printf("%5s | %10s | %10s | %12s | %8s | %8s |\n", "Round", "Pct", "CumPct", "States", "Threads", "Time");
-    printf("----------------------------------------------------------------------\n");
+    FILE *history = fopen("history.txt", "r");
+
+    if (history) {
+        char buf[4096];
+
+        while (fgets(buf, sizeof(buf), history))
+            fputs(buf, stdout);
+
+        fclose(history);
+    }
+    else{
+        FILE *history = fopen("history.txt", "a");
+        fprintf(history, "----------------------------------------------------------------------\n");
+        fprintf(history, "%5s | %10s | %10s | %12s | %7s | %8s |\n", "Round", "Pct", "CumPct", "States", "Threads", "Time");
+        fprintf(history, "----------------------------------------------------------------------\n");
+        fclose(history);
+        printf("----------------------------------------------------------------------\n");
+        printf("%5s | %10s | %10s | %12s | %7s | %8s |\n", "Round", "Pct", "CumPct", "States", "Threads", "Time");
+        printf("----------------------------------------------------------------------\n");
+    }
 
     double t_start = omp_get_wtime();
     for (uint32_t i = round; i < depth; i++){
-        n_threads = set_threads(i + 1);
-        omp_set_num_threads(n_threads);
+        if(i != round){
+            n_threads = set_threads(i + 1);
+            omp_set_num_threads(n_threads);
+        }
+        else{
+            n_threads = num_threads;
+            omp_set_num_threads(n_threads);
+            printf("\n\n\n\n\n\n\n\n"); // gets deleted by diagnostic print in set_threads on next iteration
+        }
         double t0 = omp_get_wtime();
         #pragma omp parallel
         {
@@ -475,6 +530,10 @@ int main()
                 }
             }
         }
+        PROCESS_MEMORY_COUNTERS_EX pmc;
+        GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc));
+        uint64_t commit = pmc.PrivateUsage;
+        bytes_per_state = (float)((commit / (kh_size(current) * (n_threads + 1))));
         kh_clear(state_map, current);
         double t1 = omp_get_wtime();
         unify(current, i + 1, n_threads, t1 - t0);
@@ -482,7 +541,7 @@ int main()
             kh_clear(state_map, local_next[t]);
         }
         shift(current, n_games);
-        save_state(current, i + 1);
+        save_state(current, i + 1, n_threads);
     }
     double t_end = omp_get_wtime();
     printf("Total Time: %.3f", t_end - t_start);
