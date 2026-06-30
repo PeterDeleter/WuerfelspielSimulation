@@ -4,6 +4,7 @@
 #include <string.h>
 #include <time.h>
 #include <omp.h>
+#include <windows.h>
 #include "structs.h"
 #include "khash.h"
 
@@ -295,7 +296,20 @@ void step(State state_current, __uint128_t multiplicity, int tid){
 
 // post step functions
 
-void unify(khash_t(state_map) *current, int round){
+void add_history(uint32_t round, double pct, double cum_pct, uint64_t state_size, int n_threads, double round_time){
+    // FORMAT: uint32_t round | double pct | double cum_pct| uint64_t map_size | int threads | double time
+    FILE *history = fopen("history.txt", "a");
+    if (history == NULL){
+        fprintf(history, "----------------------------------------------------------------------\n");
+        fprintf(history, "%5s | %10s | %10s | %12s | %5s | %8s |\n", "Round", "Pct", "CumPct", "States", "Threads", "Time");
+        fprintf(history, "----------------------------------------------------------------------\n");
+    }
+    fprintf(history, "%5d | %10.8f | %10.5f | %12d | %5i | %8.3f\n", round, pct, cum_pct, state_size, n_threads, round_time);
+    printf("%5d | %10.8f | %10.5f | %12d | %5i | %8.3f\n", round, pct, cum_pct, state_size, n_threads, round_time);
+    fclose(history);
+}
+
+void unify(khash_t(state_map) *current, int round, int threads, double time_elapsed){
     n_wins = 0;
     n_games = 0;
     for (int i = 0; i < num_threads; i++){
@@ -323,7 +337,7 @@ void unify(khash_t(state_map) *current, int round){
     }
     pct = ((double)n_wins / n_games) * 100;
     cum_pct += pct;
-    printf("%5d | %10.8f | %10.5f | %12d | ", round, pct, cum_pct, kh_size(current));
+    add_history(round, pct, cum_pct, kh_size(current), threads, time_elapsed);
 }
 
 void save_state(khash_t(state_map) *state, uint32_t round){
@@ -376,19 +390,46 @@ void load_state(khash_t(state_map) *state, uint32_t *round){
         khiter_t k = kh_put(state_map, state, key, &ret);
         kh_value(state, k) = val;
     }
-    uint32_t test;
-    fread(&test, sizeof(test), 1, bin_state);
-    printf("Test: %i\n", test);
     fclose(bin_state);
+}
+
+int set_threads(int round){
+    MEMORYSTATUSEX mem;
+    mem.dwLength = sizeof(mem);
+    GlobalMemoryStatusEx(&mem);
+    const double safety = 0.90;
+    uint64_t avail_ram = (uint64_t)(mem.ullAvailPhys * safety);
+    const uint64_t bytes_per_state = 100;
+    uint64_t predicted_mem = (21 * round * round * round) * bytes_per_state;
+    int n_threads = omp_get_max_threads();
+    while (n_threads > 1){
+        if (predicted_mem * (n_threads + 1) > avail_ram){
+            n_threads--;
+        }
+        else{
+            break;
+        }
+    }
+    //printf("threads: %i\n", n_threads);
+    printf("predicted committed memory: %llu", predicted_mem * (n_threads + 1));
+    return n_threads;
 }
 
 int main()
 {
+    omp_set_dynamic(0);
+    int n_threads;
     int reset;
     printf("Reset? [0/1]: ");
     scanf("%i", &reset);
     if(reset){
         remove("state.bin");
+        remove("history.txt");
+        FILE *history = fopen("history.txt", "a");
+        fprintf(history, "----------------------------------------------------------------------\n");
+        fprintf(history, "%5s | %10s | %10s | %12s | %5s | %8s |\n", "Round", "Pct", "CumPct", "States", "Threads", "Time");
+        fprintf(history, "----------------------------------------------------------------------\n");
+        fclose(history);
     }
     num_threads = omp_get_max_threads();
     local_wins  = calloc(num_threads, sizeof(*local_wins));
@@ -413,12 +454,14 @@ int main()
     printf("Depth: ");
     scanf("%i", &depth);
 
-    printf("---------------------------------------------------------------------\n");
-    printf("%5s | %10s | %10s | %12s | %8s\n", "Round", "Pct", "CumPct", "States", "Time");
-    printf("---------------------------------------------------------------------\n");
+    printf("----------------------------------------------------------------------\n");
+    printf("%5s | %10s | %10s | %12s | %8s | %8s |\n", "Round", "Pct", "CumPct", "States", "Threads", "Time");
+    printf("----------------------------------------------------------------------\n");
 
     double t_start = omp_get_wtime();
     for (uint32_t i = round; i < depth; i++){
+        n_threads = set_threads(i + 1);
+        omp_set_num_threads(n_threads);
         double t0 = omp_get_wtime();
         #pragma omp parallel
         {
@@ -432,18 +475,14 @@ int main()
                 }
             }
         }
-        //double t1 = omp_get_wtime();
         kh_clear(state_map, current);
-        unify(current, i + 1);
-        double t2 = omp_get_wtime();
+        double t1 = omp_get_wtime();
+        unify(current, i + 1, n_threads, t1 - t0);
         for (int t = 0; t < num_threads; t++){
             kh_clear(state_map, local_next[t]);
         }
         shift(current, n_games);
         save_state(current, i + 1);
-        //load_state(current, &i);
-        //i -= 1;
-        printf("%8.3f\n", t2 - t0);
     }
     double t_end = omp_get_wtime();
     printf("Total Time: %.3f", t_end - t_start);

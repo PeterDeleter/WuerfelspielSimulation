@@ -1,11 +1,12 @@
 # depslib dependency file v1.0
-1782482991 source:c:\users\heiko\desktop\studium\th ingolstadt\gppraktikum\wurfelspielrounded\main.c
+1782827824 source:c:\users\heiko\desktop\studium\th ingolstadt\gppraktikum\wurfelspielrounded\main.c
 	<stdio.h>
 	<stdlib.h>
 	<stdint.h>
 	<string.h>
 	<time.h>
 	<omp.h>
+	<windows.h>
 	"structs.h"
 	"khash.h"
 
